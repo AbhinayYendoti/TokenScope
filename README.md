@@ -52,7 +52,7 @@ percentage.
 ```
 npm install
 cp .env.example .env.local     # add SUPERDOCS_API_KEY
-npm run dev                    # http://127.0.0.1:5173
+npm run dev                    # http://localhost:5173
 ```
 
 Then:
@@ -68,6 +68,9 @@ Then:
 Without Word, the right-hand column is a live document surface using the browser's own
 Selection API, loaded with the same corpus the benchmark measures. Switch it between 3, 10
 and 50 pages and run the same rewrite to watch the gap open up by hand.
+
+(Once an Office dev certificate is installed the same command serves `https://localhost:5173`
+instead — see [Running inside Word](#running-inside-word).)
 
 Inside Word, that column is Word. See [Running inside Word](#running-inside-word).
 
@@ -299,16 +302,39 @@ so, and refuses to rewrite.
 
 ### Running inside Word
 
-`manifest.xml` sideloads TokenScope as a Word task pane. Office requires HTTPS for add-in
-content, including on localhost, so serve the pane over HTTPS (`office-addin-dev-certs`, or
-your own certificate) and point the manifest's URLs at it. Then sideload `manifest.xml` —
-on Windows via a shared folder trusted in Word's Trust Center, or with
-`npx office-addin-debugging start manifest.xml`.
+Word will not load add-in content over plain HTTP, even from localhost, so this takes one
+extra step the standalone demo does not.
 
-Inside Word, TokenScope reads the real selection through `Word.run`, and Apply replaces the
-matched range. It refuses to write if the original text is not in the document exactly once:
-zero matches means the document moved, more than one means the target is ambiguous, and
-neither is a case where guessing beats stopping.
+```bash
+npm run word:certs      # installs a locally-trusted certificate for https://localhost
+npm run word:validate   # optional: check manifest.xml against the Office schema
+npm run dev             # serves the pane over HTTPS on :5173
+```
+
+`word:certs` adds a CA named "Developer CA for Microsoft Office Add-ins" to your trust
+store, scoped to `localhost`. It is the supported way to get a dev certificate for Office,
+and `npx office-addin-dev-certs uninstall` removes it. `npm run dev` never installs
+anything on its own — without a certificate it says so and falls back to HTTP.
+
+Then sideload `manifest.xml`, either with the tooling:
+
+```bash
+npm run word:start      # sideloads and opens Word; npm run word:stop to undo
+```
+
+or by hand on Windows: put `manifest.xml` in a folder, share that folder, then in Word go to
+**File → Options → Trust Center → Trust Center Settings → Trusted Add-in Catalogs**, add the
+share path, tick **Show in Menu**, restart Word, and pick TokenScope from
+**Insert → My Add-ins → Shared Folder**.
+
+TokenScope then appears on the **Home** tab as **Token counter**. The pane replaces the demo
+document column with Word itself: it reads the real selection through `Word.run`, and Apply
+replaces the matched range. It refuses to write if the original text is not in the document
+exactly once — zero matches means the document moved, more than one means the target is
+ambiguous, and neither is a case where guessing beats stopping.
+
+The manifest points at `https://localhost:5173`. To host the pane anywhere else, replace
+that origin throughout `manifest.xml` and serve the built `dist/`.
 
 ---
 
