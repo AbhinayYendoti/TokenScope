@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { measure } from "../shared/tokens.js";
 import type { AccountStatus, DocumentSnapshot, Measurement } from "../shared/types.js";
 import * as api from "./api.js";
 import { Callout, ErrorCallout } from "./components/Callout.js";
@@ -132,18 +131,18 @@ export function App(): JSX.Element {
 
     try {
       const document = await readDocument();
-      const run = await api.measureWholeDocument({ document, instruction });
 
-      setMeasurement(
-        measure({
-          document,
-          selection: { paragraphIds: [], text: selectedText },
-          surgicalWork: result.work,
-          reportedSurgicalTokens: result.measurement.reported.surgical?.tokens ?? null,
-          wholeDocumentWork: run.work,
-          reportedWholeDocumentTokens: run.reportedTokens
-        })
-      );
+      const response = await api.measureWholeDocument({
+        document,
+        selectedText,
+        instruction,
+        surgical: {
+          work: result.work,
+          reportedTokens: result.measurement.reported.surgical?.tokens ?? null
+        }
+      });
+
+      setMeasurement(response.measurement);
     } catch (caught) {
       setError(caught instanceof Error ? caught : new Error(String(caught)));
     } finally {

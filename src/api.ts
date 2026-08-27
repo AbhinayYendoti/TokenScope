@@ -103,11 +103,19 @@ export function rewrite(input: {
   return post<RewriteResponse>("/rewrite", input);
 }
 
+export interface WholeDocumentResponse {
+  run: WholeDocumentRun;
+  /** The whole comparison, recomputed on the server with the measured value in it. */
+  measurement: Measurement;
+}
+
 export function measureWholeDocument(input: {
   document: DocumentSnapshot;
+  selectedText: string;
   instruction: string;
-}): Promise<WholeDocumentRun> {
-  return post<WholeDocumentRun>("/whole-document", input);
+  surgical: { work: JobWork; reportedTokens: number | null };
+}): Promise<WholeDocumentResponse> {
+  return post<WholeDocumentResponse>("/whole-document", input);
 }
 
 export function applyChange(input: {

@@ -1,6 +1,7 @@
 import express, { type Request, type Response, type Router } from "express";
 import { assertInstruction, InvalidSelectionError, resolveSelection } from "../shared/selection.js";
-import type { AccountStatus, DocumentSnapshot } from "../shared/types.js";
+import { measure } from "../shared/tokens.js";
+import type { AccountStatus, DocumentSnapshot, JobWork } from "../shared/types.js";
 import { getConfig } from "./config.js";
 import { TokenScopeError, toErrorBody } from "./errors.js";
 import { applyChange, measureWholeDocument, rewriteSelection } from "./rewrite.js";
@@ -18,6 +19,32 @@ interface DocumentBody {
   document?: unknown;
   selectedText?: unknown;
   instruction?: unknown;
+}
+
+interface WholeDocumentBody extends DocumentBody {
+  surgical?: unknown;
+}
+
+/** The surgical run the pane is asking us to compare against. */
+function readSurgical(value: unknown): { work: JobWork; reportedTokens: number | null } {
+  const surgical = value as { work?: unknown; reportedTokens?: unknown } | null;
+  const work = surgical?.work as JobWork | undefined;
+
+  if (
+    work === undefined ||
+    typeof work.sectionsChanged !== "number" ||
+    typeof work.output?.tokens !== "number"
+  ) {
+    throw new TokenScopeError(
+      "invalid_selection",
+      "The request did not include the surgical run to compare against."
+    );
+  }
+
+  return {
+    work,
+    reportedTokens: typeof surgical?.reportedTokens === "number" ? surgical.reportedTokens : null
+  };
 }
 
 function readDocument(value: unknown): DocumentSnapshot {
@@ -141,14 +168,35 @@ export function createRouter(): Router {
     });
   });
 
+  /**
+   * Run the counterfactual for real, and return the whole comparison again.
+   *
+   * The recomputed measurement is built here rather than in the pane so the
+   * tokenizer stays on the server: a Word task pane should not be downloading
+   * two megabytes of BPE tables to count a paragraph.
+   */
   router.post("/whole-document", (req: Request, res: Response) => {
     void handle(res, async () => {
-      const body = req.body as DocumentBody;
+      const body = req.body as WholeDocumentBody;
       const document = readDocument(body.document);
 
       try {
         const instruction = assertInstruction(readString(body.instruction, "instruction"));
-        return await measureWholeDocument({ document, instruction });
+        const selection = resolveSelection(document, readString(body.selectedText, "selectedText"));
+        const surgical = readSurgical(body.surgical);
+        const run = await measureWholeDocument({ document, instruction });
+
+        return {
+          run,
+          measurement: measure({
+            document,
+            selection,
+            surgicalWork: surgical.work,
+            reportedSurgicalTokens: surgical.reportedTokens,
+            wholeDocumentWork: run.work,
+            reportedWholeDocumentTokens: run.reportedTokens
+          })
+        };
       } catch (error) {
         rethrow(error);
       }
