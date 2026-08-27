@@ -271,34 +271,126 @@ together; the 300-page regeneration is the long pole and may not finish at all �
 
 ## Setup
 
-**Prerequisites:** Node 20+, and a SuperDocs API key from
-[use.superdocs.app](https://use.superdocs.app) → Settings → API keys.
+### 1. Prerequisites
+
+| Need                          | Version                                   | Check with                                     |
+| ----------------------------- | ----------------------------------------- | ---------------------------------------------- |
+| [Node.js](https://nodejs.org) | 20 or newer                               | `node -v`                                      |
+| npm                           | 10 or newer (ships with Node)             | `npm -v`                                       |
+| A SuperDocs account           | free tier is enough                       | [use.superdocs.app](https://use.superdocs.app) |
+| Microsoft Word                | _optional_ — Word 2019+, or Microsoft 365 | only for the add-in                            |
+
+Word is genuinely optional. Without it TokenScope runs standalone in a browser against a
+live document surface, and every SuperDocs call is the same.
+
+### 2. Install
 
 ```bash
+git clone https://github.com/AbhinayYendoti/TokenScope.git
+cd TokenScope
 npm install
-cp .env.example .env.local     # then add your key
 ```
 
-| Variable               | Purpose                                                                       |
-| ---------------------- | ----------------------------------------------------------------------------- |
-| `SUPERDOCS_API_KEY`    | Your key. Server-side only; never reaches the browser.                        |
-| `SUPERDOCS_BASE_URL`   | API root. Defaults to `https://api.superdocs.app/v1`.                         |
-| `SUPERDOCS_MODEL_TIER` | `core` (default), `turbo`, `pro`, `max`. Both sides of the comparison use it. |
-| `PORT`                 | TokenScope server port. Defaults to `8787`.                                   |
+### 3. Get a SuperDocs API key
 
-`.env.local` is git-ignored. There is no offline mock: without a key the app starts, says
-so, and refuses to rewrite.
+Sign in at [use.superdocs.app](https://use.superdocs.app), then **Settings → API keys →
+Create key**. Copy it when it is shown; you cannot read it back later. Keys start with
+`sk_` or `lce_`.
 
-| Command             | What it does                       |
-| ------------------- | ---------------------------------- |
-| `npm run dev`       | Server + Vite dev server, together |
-| `npm run server`    | API server only                    |
-| `npm test`          | Test suite                         |
-| `npm run typecheck` | `tsc --noEmit`, strict             |
-| `npm run lint`      | ESLint                             |
-| `npm run format`    | Prettier                           |
-| `npm run build`     | Typecheck + production build       |
-| `npm run bench`     | The benchmark                      |
+The free tier allows 500 operations a month. A rewrite costs one, and measuring a
+whole-document regeneration costs another.
+
+### 4. Configure
+
+Copy the example file and put your key in it:
+
+```bash
+cp .env.example .env.local          # macOS, Linux, Git Bash
+```
+
+```powershell
+Copy-Item .env.example .env.local   # Windows PowerShell
+```
+
+Then edit `.env.local`:
+
+```ini
+SUPERDOCS_API_KEY=sk_your_key_here
+```
+
+| Variable               | Required | Purpose                                                                                                                   |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `SUPERDOCS_API_KEY`    | yes      | Your key. Read only by the server; never reaches the browser.                                                             |
+| `SUPERDOCS_BASE_URL`   | no       | API root. Defaults to `https://api.superdocs.app/v1`.                                                                     |
+| `SUPERDOCS_MODEL_TIER` | no       | `core` (default), `turbo`, `pro`, `max`. Both sides of the comparison use the same tier or the comparison is meaningless. |
+| `PORT`                 | no       | TokenScope server port. Defaults to `8787`.                                                                               |
+
+`.env.local` is git-ignored. Keep it that way — and if a key has ever been pasted into a
+chat, a terminal history or a screenshot, rotate it.
+
+There is no offline mock. Without a key the app starts, tells you the key is missing, and
+refuses to rewrite rather than showing invented numbers.
+
+### 5. Run it
+
+```bash
+npm run dev
+```
+
+Open **http://localhost:5173**. You should see the pane on the left and a demo document on
+the right, with a status line reading something like _"481 of 500 SuperDocs operations
+left"_ — that line is a live call to SuperDocs, so if it appears, your key works.
+
+Then: click **Select it** above the document, leave the instruction as _"Make this more
+concise"_, and press **Rewrite selection**.
+
+### 6. Check the install
+
+```bash
+npm test          # 93 tests, no API key needed
+npm run typecheck
+npm run build
+```
+
+None of those call SuperDocs, so they pass with or without a key.
+
+To confirm the key itself is reaching the API:
+
+```bash
+npm run server
+curl http://127.0.0.1:8787/api/status
+```
+
+A working key returns your tier and quota. A missing or rejected one returns a `problem`
+field saying which.
+
+### Commands
+
+| Command                            | What it does                                                    |
+| ---------------------------------- | --------------------------------------------------------------- |
+| `npm run dev`                      | Server + pane together — the normal way to run it               |
+| `npm run server`                   | API server only                                                 |
+| `npm start`                        | Production build, then serve it                                 |
+| `npm test`                         | Test suite                                                      |
+| `npm run typecheck`                | `tsc --noEmit`, strict                                          |
+| `npm run lint`                     | ESLint                                                          |
+| `npm run format`                   | Prettier                                                        |
+| `npm run build`                    | Typecheck + production build                                    |
+| `npm run bench`                    | The benchmark (spends real quota — see [Benchmark](#benchmark)) |
+| `npm run word:certs`               | One-time HTTPS certificate for the Word add-in                  |
+| `npm run word:validate`            | Check `manifest.xml` against the Office schema                  |
+| `npm run word:start` / `word:stop` | Sideload the add-in into Word, and undo it                      |
+
+### If something goes wrong
+
+| Symptom                                     | Cause                                                        | Fix                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------- |
+| Pane says _"SUPERDOCS_API_KEY is not set"_  | No `.env.local`, or the server was started before it existed | Create it, then restart `npm run dev`                                 |
+| _"SuperDocs rejected the API key"_          | Key wrong, truncated, or revoked                             | Re-copy from Settings → API keys                                      |
+| _"monthly operation quota is used up"_      | 500 free operations spent                                    | Wait for the monthly reset, or upgrade                                |
+| _"The TokenScope server is not responding"_ | Only Vite is running                                         | Use `npm run dev`, not `vite` alone                                   |
+| Port 5173 already in use                    | Something else has it                                        | Free the port — the Word manifest names 5173 exactly, so it is pinned |
+| Rewrite hangs for minutes                   | Large document                                               | Expected: a 50-page edit takes ~1 min, 300 pages ~5                   |
 
 ### Running inside Word
 
