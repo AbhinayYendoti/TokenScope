@@ -75,6 +75,11 @@ export const TERMINAL = new Set(["completed", "succeeded", "failed", "cancelled"
 export const PAUSED = new Set(["awaiting_approval"]);
 
 const REQUEST_TIMEOUT_MS = 120_000;
+const MAX_RETRIES = 3;
+
+function backoff(attempt: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 500 * 2 ** attempt));
+}
 
 async function call<T>(
   path: string,
@@ -85,36 +90,76 @@ async function call<T>(
   const { baseUrl } = getConfig();
   const method = init.method ?? "GET";
 
-  let response: Response;
+  // Minted once and reused across retries, so a retried POST cannot bill twice.
+  const idempotencyKey = `ts_${crypto.randomUUID()}`;
 
-  try {
-    response = await fetch(`${baseUrl}${path}`, {
-      method,
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${key}`,
-        ...(init.json === undefined ? {} : { "Content-Type": "application/json" }),
-        // A retried POST must not be able to bill a second operation.
-        ...(method === "POST" ? { "Idempotency-Key": `ts_${crypto.randomUUID()}` } : {})
-      },
-      ...(init.json === undefined ? {} : { body: JSON.stringify(init.json) }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-    });
-  } catch (error) {
-    const timedOut = error instanceof Error && error.name === "TimeoutError";
+  const request: RequestInit = {
+    method,
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${key}`,
+      ...(init.json === undefined ? {} : { "Content-Type": "application/json" }),
+      ...(method === "POST" ? { "Idempotency-Key": idempotencyKey } : {})
+    },
+    ...(init.json === undefined ? {} : { body: JSON.stringify(init.json) }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+  };
 
-    throw new TokenScopeError(
-      timedOut ? "timeout" : "upstream_error",
-      timedOut
-        ? `SuperDocs did not answer ${method} ${path} within ${REQUEST_TIMEOUT_MS / 1000}s.`
-        : `Could not reach SuperDocs (${method} ${path}).`,
-      { hint: "Check network access to api.superdocs.app, then try again." }
-    );
+  let text = "";
+  let lastError: TokenScopeError | undefined;
+
+  /**
+   * Retry the faults that are the gateway's rather than ours.
+   *
+   * A 503 on a poll is not a failed job: a 300-page run in the benchmark was
+   * lost at 99% to exactly that. Rate limits, gateway errors and dropped
+   * connections are retried; a 401 or a 400 is not, because retrying it would
+   * only produce the same answer more slowly.
+   */
+  for (let attempt = 0; ; attempt += 1) {
+    let status: number;
+
+    try {
+      // Reading the body is inside the try on purpose: the request timeout can
+      // fire while a large job record is still streaming, and that rejection has
+      // to be mapped like any other timeout rather than escaping as a raw
+      // DOMException.
+      const response = await fetch(`${baseUrl}${path}`, {
+        ...request,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+      });
+
+      status = response.status;
+      text = await response.text();
+    } catch (error) {
+      const timedOut = error instanceof Error && error.name === "TimeoutError";
+
+      lastError = new TokenScopeError(
+        timedOut ? "timeout" : "upstream_error",
+        timedOut
+          ? `SuperDocs did not answer ${method} ${path} within ${REQUEST_TIMEOUT_MS / 1000}s.`
+          : `Could not reach SuperDocs (${method} ${path}).`,
+        {
+          hint: timedOut
+            ? "Very large documents can outrun the request timeout. Retry, or use a smaller document."
+            : "Check network access to api.superdocs.app, then try again."
+        }
+      );
+
+      if (attempt >= MAX_RETRIES) throw lastError;
+
+      await backoff(attempt);
+      continue;
+    }
+
+    if (status >= 200 && status < 300) break;
+
+    lastError = upstreamError(status, path, text);
+
+    if (!(status >= 500 || status === 429) || attempt >= MAX_RETRIES) throw lastError;
+
+    await backoff(attempt);
   }
-
-  const text = await response.text();
-
-  if (!response.ok) throw upstreamError(response.status, path, text);
 
   let parsed: unknown;
 
@@ -195,8 +240,17 @@ export async function startEdit(options: StartEditOptions): Promise<{ jobId: str
   return { jobId: started.job_id };
 }
 
-export async function getJob(jobId: string): Promise<Job> {
-  return call(`/jobs/${encodeURIComponent(jobId)}`, JobSchema);
+/**
+ * Read a job.
+ *
+ * `compact` omits the result body and the streamed progress events, leaving the
+ * status, progress and pending-change ids. On a 300-page regeneration the full
+ * record is megabytes of proposed HTML, and pulling it on every poll is what the
+ * API's own guidance says not to do: poll compact, then read once in full.
+ */
+export async function getJob(jobId: string, compact = false): Promise<Job> {
+  const query = compact ? "?compact=true" : "";
+  return call(`/jobs/${encodeURIComponent(jobId)}${query}`, JobSchema);
 }
 
 export interface PollOptions {
@@ -212,7 +266,7 @@ export async function waitForJob(jobId: string, options: PollOptions = {}): Prom
   const deadline = Date.now() + timeoutMs;
 
   for (;;) {
-    const job = await getJob(jobId);
+    const job = await getJob(jobId, true);
     options.onProgress?.(job);
 
     if (job.status === "failed" || job.status === "cancelled") {
@@ -222,7 +276,8 @@ export async function waitForJob(jobId: string, options: PollOptions = {}): Prom
       });
     }
 
-    if (TERMINAL.has(job.status) || PAUSED.has(job.status)) return job;
+    // Settled: now, and only now, pay for the full record with the changes in it.
+    if (TERMINAL.has(job.status) || PAUSED.has(job.status)) return getJob(jobId);
 
     if (Date.now() >= deadline) {
       throw new TokenScopeError(
