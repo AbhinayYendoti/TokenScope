@@ -151,9 +151,11 @@ export function checkScope(
 
   for (const change of changes) {
     const original = normalize(change.oldText);
-    const matches = selected.some(
-      (paragraph) => paragraph === original || paragraph.includes(original)
-    );
+    // An empty original is inside every string. It proves nothing, so it maps to
+    // nothing: a change with no original text is a change we cannot place.
+    const matches =
+      original.length > 0 &&
+      selected.some((paragraph) => paragraph === original || paragraph.includes(original));
 
     (matches ? inScope : outOfScope).push(change);
   }
