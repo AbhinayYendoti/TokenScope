@@ -10,7 +10,7 @@
 export type TokenSource =
   /** Reported by SuperDocs for a real job it ran. Not computed by us. */
   | "measured"
-  /** Tokenized locally from the exact text with a real BPE tokenizer. */
+  /** Tokenized locally with a real BPE tokenizer from text that really exists. */
   | "tokenized"
   /** Derived from measured and tokenized values. Never a guess, but not observed. */
   | "estimated";
@@ -20,6 +20,11 @@ export interface TokenCount {
   source: TokenSource;
   /** One sentence a reviewer can check the number against. */
   method: string;
+}
+
+export interface Savings {
+  tokens: number;
+  ratio: number;
 }
 
 /** A paragraph of the document as the host (Word, or the demo surface) sees it. */
@@ -52,24 +57,54 @@ export interface ProposedChange {
   explanation: string;
 }
 
+/**
+ * What a job actually had to do, read off the changes it returned.
+ *
+ * `sectionsChanged` and `output` come from the job's own result: how many
+ * sections it rewrote, and how much text it had to emit to do it. Unlike the
+ * provider's own counter these are available on every job and they behave
+ * monotonically with document size. See README, "Token methodology".
+ */
+export interface JobWork {
+  sectionsChanged: number;
+  output: TokenCount;
+}
+
+/**
+ * One side-by-side comparison: surgical against whole-document.
+ *
+ * `null` means the number does not exist rather than that it is zero, and the UI
+ * has to say so. TokenScope shows two of these - what SuperDocs reported each
+ * operation cost, and how much text each operation had to write.
+ */
+export interface Comparison {
+  label: string;
+  note: string;
+  surgical: TokenCount | null;
+  wholeDocument: TokenCount | null;
+  savings: Savings | null;
+}
+
 export interface Measurement {
   /** Tokens in the selected text alone. Context for the reader, not a cost. */
   selection: TokenCount;
   /** Tokens in the whole document body. Context for the reader, not a cost. */
   document: TokenCount;
-  /** What the surgical rewrite actually cost, as reported by SuperDocs. */
-  surgical: TokenCount;
-  /** What regenerating the whole document would cost. */
-  wholeDocument: TokenCount;
-  /** wholeDocument - surgical, and that difference as a fraction of wholeDocument. */
-  savings: { tokens: number; ratio: number };
+  /** What SuperDocs reported each operation cost. Absent on some large jobs. */
+  reported: Comparison;
+  /** How much text each operation had to write. Always available. */
+  written: Comparison;
+  /** Sections each operation changed. 1 versus the whole document. */
+  sections: { surgical: number; wholeDocument: number | null };
 }
 
 /** Result of running the whole-document counterfactual for real. */
 export interface WholeDocumentRun {
   sessionId: string;
   jobId: string;
-  tokens: TokenCount;
+  /** null when SuperDocs reported no token count for the job. */
+  reportedTokens: number | null;
+  work: JobWork;
   elapsedMs: number;
 }
 

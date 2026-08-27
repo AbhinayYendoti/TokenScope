@@ -1,22 +1,31 @@
 import { encode } from "gpt-tokenizer";
-import type { DocumentSnapshot, Measurement, Selection, TokenCount } from "./types.js";
+import type {
+  Comparison,
+  DocumentSnapshot,
+  JobWork,
+  Measurement,
+  Savings,
+  Selection,
+  TokenCount
+} from "./types.js";
 
 /**
  * Token arithmetic.
  *
- * Two different things are called "tokens" in this file and they must never be
+ * Three different things get called "tokens" here and they must never be
  * conflated:
  *
- *   1. Text tokens  - how many tokens a piece of text is worth. Produced by a
- *                     real BPE tokenizer (o200k_base) over the exact string.
- *                     Deterministic, reproducible, and free.
- *   2. Operation cost - how many tokens SuperDocs actually burned running a job.
- *                     Only SuperDocs can report this; we read it back off the
- *                     job record. It includes the agent's system prompt, tool
- *                     definitions and reasoning, none of which we can see.
+ *   1. Text tokens     how many tokens a piece of text is worth. Produced by a
+ *                      real BPE tokenizer (o200k_base) over the exact string.
+ *                      Deterministic, reproducible, free.
+ *   2. Reported cost   how many tokens SuperDocs said a job consumed. Only
+ *                      SuperDocs can know this; TokenScope reads it back off the
+ *                      job record and never computes it.
+ *   3. Written output  how much text a job actually emitted, tokenized with (1)
+ *                      from the job's own returned changes.
  *
- * (1) is never used as a stand-in for (2). It is used to reason about the *delta*
- * between the two sides of the comparison, which is stated explicitly below.
+ * (1) is never presented as (2). (3) exists because (2) turned out to be
+ * unreliable on large jobs - see README, "Token methodology".
  */
 
 /** o200k_base is not necessarily SuperDocs' tokenizer. See README, "Limitations". */
@@ -39,22 +48,44 @@ export function tokenizeText(text: string, what: string): TokenCount {
   };
 }
 
+export function savings(wholeDocument: number, surgical: number): Savings {
+  const tokens = wholeDocument - surgical;
+  return { tokens, ratio: wholeDocument === 0 ? 0 : tokens / wholeDocument };
+}
+
+function compare(
+  label: string,
+  note: string,
+  surgical: TokenCount | null,
+  wholeDocument: TokenCount | null
+): Comparison {
+  return {
+    label,
+    note,
+    surgical,
+    wholeDocument,
+    savings:
+      surgical === null || wholeDocument === null
+        ? null
+        : savings(wholeDocument.tokens, surgical.tokens)
+  };
+}
+
 /**
- * The whole-document counterfactual, derived from measured values.
+ * The whole-document counterfactual for the reported-cost comparison, derived
+ * from measured values.
  *
  * A whole-document regeneration has to do everything the surgical edit did, and
- * then also read the rest of the document into the prompt and re-emit it in the
- * output. So:
+ * then also read the rest of the document into the prompt and re-emit it:
  *
- *     estimate = measured_surgical + 2 x (document_tokens - selection_tokens)
+ *     estimate = reported_surgical + 2 x (document_tokens - selection_tokens)
  *
- * `measured_surgical` carries the fixed agent overhead, so both sides of the
+ * `reported_surgical` carries the fixed agent overhead, so both sides of the
  * comparison include it and the difference is attributable to document size
- * alone. The factor of 2 is the read and the write of the untouched remainder.
+ * alone. The factor of two is the read and the write of the untouched remainder.
  *
- * This is an estimate and is labelled as one everywhere it is shown. Run
- * `npm run bench` to replace it with a measured number: the benchmark performs
- * a real whole-document regeneration and records what it actually cost.
+ * This is an estimate and is labelled as one everywhere it appears. Running the
+ * regeneration for real replaces it with a measured number.
  */
 export function estimateWholeDocumentTokens(
   surgicalTokens: number,
@@ -67,54 +98,93 @@ export function estimateWholeDocumentTokens(
     tokens: surgicalTokens + 2 * remainder,
     source: "estimated",
     method:
-      "measured surgical cost + 2 x (document - selection) text tokens: the untouched " +
+      "reported surgical cost + 2 x (document - selection) text tokens: the untouched " +
       "remainder has to be read into the prompt and written back out again"
   };
-}
-
-export function savings(
-  wholeDocument: number,
-  surgical: number
-): { tokens: number; ratio: number } {
-  const tokens = wholeDocument - surgical;
-  return { tokens, ratio: wholeDocument === 0 ? 0 : tokens / wholeDocument };
 }
 
 export interface MeasureInput {
   document: DocumentSnapshot;
   selection: Selection;
-  /** Cost SuperDocs reported for the surgical job. */
-  surgicalTokens: number;
-  /** Cost SuperDocs reported for a real whole-document regeneration, if one ran. */
-  measuredWholeDocumentTokens?: number;
+  /** What the surgical job wrote, and how many sections it touched. */
+  surgicalWork: JobWork;
+  /** SuperDocs' reported cost for the surgical job. null when it reported none. */
+  reportedSurgicalTokens: number | null;
+  /** The same two figures for a real whole-document regeneration, if one ran. */
+  wholeDocumentWork?: JobWork | undefined;
+  reportedWholeDocumentTokens?: number | null | undefined;
 }
 
 export function measure(input: MeasureInput): Measurement {
   const selection = tokenizeText(input.selection.text, "selected text");
   const document = tokenizeText(documentText(input.document), "document body");
 
-  const surgical: TokenCount = {
-    tokens: input.surgicalTokens,
-    source: "measured",
-    method: "reported by SuperDocs as metadata.cumulative_tokens on the rewrite job"
-  };
-
-  const wholeDocument: TokenCount =
-    input.measuredWholeDocumentTokens === undefined
-      ? estimateWholeDocumentTokens(surgical.tokens, document.tokens, selection.tokens)
+  const reportedSurgical: TokenCount | null =
+    input.reportedSurgicalTokens === null
+      ? null
       : {
-          tokens: input.measuredWholeDocumentTokens,
+          tokens: input.reportedSurgicalTokens,
           source: "measured",
-          method:
-            "reported by SuperDocs as metadata.cumulative_tokens on a real " +
-            "whole-document regeneration of the same document"
+          method: "reported by SuperDocs as metadata.cumulative_tokens on the rewrite job"
         };
+
+  const ranForReal = input.wholeDocumentWork !== undefined;
+
+  let reportedWhole: TokenCount | null;
+
+  if (ranForReal) {
+    reportedWhole =
+      input.reportedWholeDocumentTokens === null || input.reportedWholeDocumentTokens === undefined
+        ? null
+        : {
+            tokens: input.reportedWholeDocumentTokens,
+            source: "measured",
+            method:
+              "reported by SuperDocs as metadata.cumulative_tokens on a real whole-document " +
+              "regeneration of the same document, run in a throwaway session"
+          };
+  } else {
+    reportedWhole =
+      reportedSurgical === null
+        ? null
+        : estimateWholeDocumentTokens(reportedSurgical.tokens, document.tokens, selection.tokens);
+  }
+
+  /**
+   * How much a regeneration would have had to write, when none was run: the
+   * whole document. That is what "regenerate the document" means, and it is
+   * tokenized from the document the user actually has.
+   */
+  const writtenWhole: TokenCount =
+    input.wholeDocumentWork?.output ??
+    ({
+      tokens: document.tokens,
+      source: "estimated",
+      method:
+        "a full regeneration has to emit every paragraph, so this is the document body " +
+        `tokenized with ${TEXT_TOKENIZER}`
+    } satisfies TokenCount);
 
   return {
     selection,
     document,
-    surgical,
-    wholeDocument,
-    savings: savings(wholeDocument.tokens, surgical.tokens)
+    reported: compare(
+      "What SuperDocs reported it cost",
+      "SuperDocs' own metadata.cumulative_tokens for each job. It is a context measure " +
+        "rather than a running total, and it is not always reported on very large jobs.",
+      reportedSurgical,
+      reportedWhole
+    ),
+    written: compare(
+      "How much text had to be written",
+      "Tokenized from the text each job actually returned. Available on every job, at " +
+        "every document size.",
+      input.surgicalWork.output,
+      writtenWhole
+    ),
+    sections: {
+      surgical: input.surgicalWork.sectionsChanged,
+      wholeDocument: input.wholeDocumentWork?.sectionsChanged ?? null
+    }
   };
 }

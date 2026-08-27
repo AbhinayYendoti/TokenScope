@@ -366,6 +366,35 @@ textarea:focus-visible {
 
 /* -------------------------------------------------------- the comparison */
 
+.comparisons {
+  display: grid;
+  gap: 22px;
+}
+
+.comparison__label {
+  margin: 0 0 9px;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.comparison__note {
+  margin: 9px 0 0;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.comparison__no-savings {
+  margin: 10px 0 0;
+  padding: 11px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  color: var(--text-faint);
+  font-size: 12px;
+  text-align: center;
+}
+
 .comparison__pair {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -410,6 +439,13 @@ textarea:focus-visible {
 
 .figure--whole .figure__value {
   color: var(--whole);
+}
+
+/* A figure with no number must not read like a figure with a small one. */
+.figure__value--absent {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-faint);
 }
 
 .figure__unit {

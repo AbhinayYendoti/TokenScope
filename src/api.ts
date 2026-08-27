@@ -2,6 +2,7 @@ import type {
   AccountStatus,
   ApiErrorBody,
   DocumentSnapshot,
+  JobWork,
   Measurement,
   ProposedChange,
   WholeDocumentRun
@@ -39,6 +40,7 @@ export interface RewriteResponse {
   changes: ProposedChange[];
   scope: ScopeReport;
   measurement: Measurement;
+  work: JobWork;
   elapsedMs: number;
 }
 

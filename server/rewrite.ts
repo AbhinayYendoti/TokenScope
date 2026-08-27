@@ -7,15 +7,15 @@ import {
   toDocumentHtml,
   type ScopeReport
 } from "../shared/selection.js";
-import { measure } from "../shared/tokens.js";
+import { countTextTokens, measure } from "../shared/tokens.js";
 import type {
   DocumentSnapshot,
+  JobWork,
   Measurement,
   ProposedChange,
   Selection,
   WholeDocumentRun
 } from "../shared/types.js";
-import { TokenScopeError } from "./errors.js";
 import type { ModelTier } from "./config.js";
 import {
   decideChange,
@@ -58,23 +58,37 @@ function toProposedChange(change: PendingChange): ProposedChange {
   };
 }
 
-/** The cost of a job, or a clear failure. A missing number is never treated as 0. */
-function costOf(job: Job, what: string): number {
-  const tokens = reportedTokens(job);
+/**
+ * What the job had to write, counted from the changes it returned.
+ *
+ * This is the number that stays honest at every document size. `new_html` is the
+ * text SuperDocs actually emitted, so tokenizing it measures the output the
+ * operation required - one paragraph for a surgical edit, the whole document for
+ * a regeneration - without depending on a provider counter.
+ */
+function workOf(changes: ProposedChange[]): JobWork {
+  const output = changes.reduce((sum, change) => sum + countTextTokens(change.newText), 0);
 
-  if (tokens === undefined) {
-    throw new TokenScopeError(
-      "unexpected_response",
-      `SuperDocs did not report a token count for the ${what}.`,
-      {
-        hint:
-          "TokenScope reads metadata.cumulative_tokens off the job record. Without it " +
-          "there is no measured number to show, and it will not invent one."
-      }
-    );
-  }
+  return {
+    sectionsChanged: changes.length,
+    output: {
+      tokens: output,
+      source: "tokenized",
+      method: "tokenized from the text SuperDocs returned for every section it changed on this job"
+    }
+  };
+}
 
-  return tokens;
+/**
+ * What SuperDocs said the job cost, or null.
+ *
+ * `metadata.cumulative_tokens` is absent on some jobs - it was missing from the
+ * 300-page run in the benchmark. Absent means "SuperDocs reported no number",
+ * which is not zero and is not something to substitute a guess for. The caller
+ * gets null and the UI says so.
+ */
+function reportedCost(job: Job): number | null {
+  return reportedTokens(job) ?? null;
 }
 
 export interface SurgicalRewrite {
@@ -84,6 +98,7 @@ export interface SurgicalRewrite {
   changes: ProposedChange[];
   scope: ScopeReport;
   measurement: Measurement;
+  work: JobWork;
   elapsedMs: number;
 }
 
@@ -123,6 +138,7 @@ export async function rewriteSelection(options: RewriteOptions): Promise<Surgica
 
   const changes = pendingChanges(job).map(toProposedChange);
   const scope = checkScope(changes, options.document, options.selection);
+  const work = workOf(changes);
 
   return {
     sessionId,
@@ -133,8 +149,10 @@ export async function rewriteSelection(options: RewriteOptions): Promise<Surgica
     measurement: measure({
       document: options.document,
       selection: options.selection,
-      surgicalTokens: costOf(job, "rewrite")
+      surgicalWork: work,
+      reportedSurgicalTokens: reportedCost(job)
     }),
+    work,
     elapsedMs: Date.now() - startedAt
   };
 }
@@ -173,13 +191,8 @@ export async function measureWholeDocument(options: {
   return {
     sessionId,
     jobId,
-    tokens: {
-      tokens: costOf(job, "whole-document regeneration"),
-      source: "measured",
-      method:
-        "reported by SuperDocs as metadata.cumulative_tokens on a real whole-document " +
-        "regeneration of the same document, run in a throwaway session"
-    },
+    reportedTokens: reportedCost(job),
+    work: workOf(pendingChanges(job).map(toProposedChange)),
     elapsedMs: Date.now() - startedAt
   };
 }

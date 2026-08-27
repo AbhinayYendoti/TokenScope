@@ -138,8 +138,10 @@ export function App(): JSX.Element {
         measure({
           document,
           selection: { paragraphIds: [], text: selectedText },
-          surgicalTokens: result.measurement.surgical.tokens,
-          measuredWholeDocumentTokens: run.tokens.tokens
+          surgicalWork: result.work,
+          reportedSurgicalTokens: result.measurement.reported.surgical?.tokens ?? null,
+          wholeDocumentWork: run.work,
+          reportedWholeDocumentTokens: run.reportedTokens
         })
       );
     } catch (caught) {
@@ -302,9 +304,12 @@ export function App(): JSX.Element {
                 onMeasureWholeDocument={() => void onMeasureWholeDocument()}
               />
               <p className="provenance">
-                Surgical cost is SuperDocs&rsquo; own <code>metadata.cumulative_tokens</code> for
-                job <code>{result.jobId.slice(0, 8)}</code>, taken{" "}
-                {(result.elapsedMs / 1000).toFixed(1)}s after it started.
+                Measured on SuperDocs job <code>{result.jobId.slice(0, 8)}</code>, which took{" "}
+                {(result.elapsedMs / 1000).toFixed(1)}s and changed{" "}
+                {result.work.sectionsChanged === 1
+                  ? "one section"
+                  : `${result.work.sectionsChanged} sections`}{" "}
+                of the document.
               </p>
             </section>
           </>

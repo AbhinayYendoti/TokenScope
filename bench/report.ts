@@ -2,31 +2,31 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 /**
- * The benchmark's stored shape, and the Markdown table generated from it.
+ * The benchmark's stored shape, and the Markdown report generated from it.
  *
- * The table in bench/RESULTS.md is produced by this file from
- * bench/results.json. Nothing is transcribed: if a cell has no number it is
- * because the run that would have produced it did not succeed, and the table
- * says so.
+ * The tables in bench/RESULTS.md are produced by this file from
+ * bench/results.json. Nothing is transcribed by hand: if a cell has no number it
+ * is because the run that would have produced it did not produce one, and the
+ * table says so rather than leaving a plausible figure in its place.
  */
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 export const RESULTS_PATH = path.join(here, "results.json");
 
-export interface SurgicalRow {
-  tokens: number;
+export interface JobRow {
+  /** SuperDocs' metadata.cumulative_tokens. null when it reported none. */
+  reportedTokens: number | null;
+  /** Tokens of text the job actually returned. Always available. */
+  writtenTokens: number;
+  sectionsChanged: number;
   elapsedMs: number;
   jobId: string;
-  changesProposed: number;
-  changesInScope: number;
-  changesOutOfScope: number;
 }
 
-export interface WholeDocumentRow {
-  tokens: number;
-  elapsedMs: number;
-  jobId: string;
+export interface SurgicalRow extends JobRow {
+  changesInScope: number;
+  changesOutOfScope: number;
 }
 
 export interface BenchmarkRow {
@@ -35,8 +35,8 @@ export interface BenchmarkRow {
   documentTextTokens: number;
   selectionTextTokens: number;
   surgical: SurgicalRow | null;
-  wholeDocument: WholeDocumentRow | null;
-  /** What shared/tokens.ts would have predicted, for calibration. */
+  wholeDocument: JobRow | null;
+  /** What shared/tokens.ts would have predicted for the reported cost. */
   estimatedWholeDocument: number | null;
   measuredAt: string;
   surgicalError?: string;
@@ -52,11 +52,21 @@ export interface BenchmarkFile {
 }
 
 function n(value: number | null | undefined): string {
-  return value === null || value === undefined ? "—" : value.toLocaleString("en-US");
+  return value === null || value === undefined ? "not reported" : value.toLocaleString("en-US");
 }
 
-function pct(value: number | null): string {
-  return value === null ? "—" : `${(value * 100).toFixed(2)}%`;
+function ratio(whole: number | null | undefined, surgical: number | null | undefined): string {
+  if (whole === null || whole === undefined || surgical === null || surgical === undefined) {
+    return "—";
+  }
+
+  if (whole === 0) return "—";
+
+  return `${(((whole - surgical) / whole) * 100).toFixed(2)}%`;
+}
+
+function seconds(ms: number | undefined): string {
+  return ms === undefined ? "—" : `${(ms / 1000).toFixed(1)}s`;
 }
 
 export function renderReport(file: BenchmarkFile): string {
@@ -68,79 +78,120 @@ export function renderReport(file: BenchmarkFile): string {
   lines.push("");
   lines.push(`- Run at: ${file.generatedAt}`);
   lines.push(`- Model tier: \`${file.modelTier}\``);
-  lines.push(`- Page size: ${file.wordsPerPage} words`);
+  lines.push(`- Page size: ${file.wordsPerPage} words of body text`);
   lines.push(`- Instruction: "${file.instruction}"`);
   lines.push("");
   lines.push(
-    "**Surgical** and **Whole document** are both measured: each is the " +
-      "`metadata.cumulative_tokens` SuperDocs reported for a real job it ran on that " +
-      "document. **Selection** and **Document** are text-token counts of the actual " +
-      "strings, tokenized locally."
+    "Each row is two real SuperDocs jobs on the same generated document: a surgical " +
+      "rewrite of one paragraph, and a full regeneration of the whole document with the " +
+      "same instruction."
+  );
+  lines.push("");
+
+  lines.push("## 1. Text the job had to write");
+  lines.push("");
+  lines.push(
+    "Tokenized from the text each job actually returned. This is the measurement that " +
+      "is available on every job at every size, and it is the one to read first."
   );
   lines.push("");
   lines.push(
-    "| Document | Words | Selection tokens | Document tokens | Surgical tokens | Whole-document tokens | Savings |"
+    "| Document | Words | Selection tokens | Document tokens | Surgical written | Whole-document written | Savings |"
   );
   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
 
   for (const row of file.rows) {
-    const surgical = row.surgical?.tokens ?? null;
-    const whole = row.wholeDocument?.tokens ?? null;
-    const ratio =
-      surgical !== null && whole !== null && whole !== 0 ? (whole - surgical) / whole : null;
-
     lines.push(
       `| ${row.pages} pages | ${n(row.words)} | ${n(row.selectionTextTokens)} | ` +
-        `${n(row.documentTextTokens)} | ${n(surgical)} | ${n(whole)} | ${pct(ratio)} |`
+        `${n(row.documentTextTokens)} | ${n(row.surgical?.writtenTokens)} | ` +
+        `${n(row.wholeDocument?.writtenTokens)} | ` +
+        `${ratio(row.wholeDocument?.writtenTokens, row.surgical?.writtenTokens)} |`
     );
   }
 
   lines.push("");
-  lines.push("## Estimator calibration");
+  lines.push("## 2. Sections the job changed");
   lines.push("");
   lines.push(
-    "The task pane shows an *estimated* whole-document cost until a real one is " +
-      "measured. This table is how far that estimate was from the measured value on " +
-      "this run."
+    "The same claim without any tokenizer in the way: a surgical edit changes the one " +
+      "section you selected, whatever the document's size."
   );
   lines.push("");
-  lines.push("| Document | Estimated | Measured | Estimate ÷ measured |");
+  lines.push(
+    "| Document | Surgical sections | Whole-document sections | In scope | Out of scope |"
+  );
+  lines.push("| --- | ---: | ---: | ---: | ---: |");
+
+  for (const row of file.rows) {
+    lines.push(
+      `| ${row.pages} pages | ${n(row.surgical?.sectionsChanged)} | ` +
+        `${n(row.wholeDocument?.sectionsChanged)} | ${n(row.surgical?.changesInScope)} | ` +
+        `${n(row.surgical?.changesOutOfScope)} |`
+    );
+  }
+
+  lines.push("");
+  lines.push("## 3. What SuperDocs reported it cost");
+  lines.push("");
+  lines.push(
+    "`metadata.cumulative_tokens` from each job record. This is SuperDocs' own figure " +
+      "and TokenScope never computes it. Read the caveats in the README before quoting " +
+      "these: the field behaves like a measure of the agent's current context rather " +
+      "than a running total, it is noisy from one run to the next, and it is not always " +
+      "reported. Section 1 is the measurement to lean on."
+  );
+  lines.push("");
+  lines.push("| Document | Surgical reported | Whole-document reported | Difference |");
+  lines.push("| --- | ---: | ---: | ---: |");
+
+  for (const row of file.rows) {
+    lines.push(
+      `| ${row.pages} pages | ${n(row.surgical?.reportedTokens)} | ` +
+        `${n(row.wholeDocument?.reportedTokens)} | ` +
+        `${ratio(row.wholeDocument?.reportedTokens, row.surgical?.reportedTokens)} |`
+    );
+  }
+
+  lines.push("");
+  lines.push("## 4. Estimator calibration");
+  lines.push("");
+  lines.push(
+    "Until a regeneration is run for real, the task pane shows an estimate. This is how " +
+      "far that estimate was from the reported figure on this run."
+  );
+  lines.push("");
+  lines.push("| Document | Estimated | Reported | Estimate ÷ reported |");
   lines.push("| --- | ---: | ---: | ---: |");
 
   for (const row of file.rows) {
     const estimate = row.estimatedWholeDocument;
-    const measured = row.wholeDocument?.tokens ?? null;
-    const ratio =
-      estimate !== null && measured !== null && measured !== 0
-        ? `${(estimate / measured).toFixed(2)}×`
-        : "—";
+    const reported = row.wholeDocument?.reportedTokens ?? null;
 
-    lines.push(`| ${row.pages} pages | ${n(estimate)} | ${n(measured)} | ${ratio} |`);
+    lines.push(
+      `| ${row.pages} pages | ${n(estimate)} | ${n(reported)} | ` +
+        `${estimate !== null && reported !== null && reported !== 0 ? `${(estimate / reported).toFixed(2)}×` : "—"} |`
+    );
   }
 
   lines.push("");
-  lines.push("## Scope check");
+  lines.push("## 5. Wall time, job ids and when each row was taken");
   lines.push("");
   lines.push(
-    "Every surgical run is checked: how many changes SuperDocs proposed, and how many " +
-      "of them fell inside the selected paragraph. A run that edits anything else is a " +
-      "failed run, whatever it cost."
+    "Rows can be re-run individually (`npm run bench -- 50`), so each carries its own " +
+      "timestamp and the ids of the two jobs that produced it. Every number above is " +
+      "traceable to a job that exists."
   );
   lines.push("");
   lines.push(
-    "| Document | Changes proposed | In scope | Out of scope | Surgical wall time | Whole-document wall time |"
+    "| Document | Surgical | Whole document | Measured at | Surgical job | Whole-document job |"
   );
-  lines.push("| --- | ---: | ---: | ---: | ---: | ---: |");
+  lines.push("| --- | ---: | ---: | --- | --- | --- |");
 
   for (const row of file.rows) {
-    const s = row.surgical;
-    const w = row.wholeDocument;
-
     lines.push(
-      `| ${row.pages} pages | ${n(s?.changesProposed)} | ${n(s?.changesInScope)} | ` +
-        `${n(s?.changesOutOfScope)} | ` +
-        `${s ? `${(s.elapsedMs / 1000).toFixed(1)}s` : "—"} | ` +
-        `${w ? `${(w.elapsedMs / 1000).toFixed(1)}s` : "—"} |`
+      `| ${row.pages} pages | ${seconds(row.surgical?.elapsedMs)} | ` +
+        `${seconds(row.wholeDocument?.elapsedMs)} | ${row.measuredAt} | ` +
+        `\`${row.surgical?.jobId ?? "—"}\` | \`${row.wholeDocument?.jobId ?? "—"}\` |`
     );
   }
 
@@ -162,19 +213,6 @@ export function renderReport(file: BenchmarkFile): string {
         lines.push(`- **${row.pages} pages, whole-document**: ${row.wholeDocumentError}`);
       }
     }
-  }
-
-  lines.push("");
-  lines.push("### Job ids");
-  lines.push("");
-  lines.push("| Document | Surgical job | Whole-document job |");
-  lines.push("| --- | --- | --- |");
-
-  for (const row of file.rows) {
-    lines.push(
-      `| ${row.pages} pages | \`${row.surgical?.jobId ?? "—"}\` | ` +
-        `\`${row.wholeDocument?.jobId ?? "—"}\` |`
-    );
   }
 
   lines.push("");

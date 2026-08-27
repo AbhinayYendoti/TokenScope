@@ -53,6 +53,10 @@ function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function fmt(value: number | null): string {
+  return value === null ? "not reported" : value.toLocaleString("en-US");
+}
+
 function stamp(): string {
   return new Date().toISOString().replace(/\.\d+Z$/u, "Z");
 }
@@ -119,24 +123,25 @@ async function main(): Promise<void> {
       process.stdout.write("\r");
 
       row.surgical = {
-        tokens: result.measurement.surgical.tokens,
+        reportedTokens: result.measurement.reported.surgical?.tokens ?? null,
+        writtenTokens: result.work.output.tokens,
+        sectionsChanged: result.work.sectionsChanged,
         elapsedMs: Date.now() - t0,
         jobId: result.jobId,
-        changesProposed: result.changes.length,
         changesInScope: result.scope.inScope.length,
         changesOutOfScope: result.scope.outOfScope.length
       };
 
-      row.estimatedWholeDocument = estimateWholeDocumentTokens(
-        row.surgical.tokens,
-        docTokens,
-        selTokens
-      ).tokens;
+      row.estimatedWholeDocument =
+        row.surgical.reportedTokens === null
+          ? null
+          : estimateWholeDocumentTokens(row.surgical.reportedTokens, docTokens, selTokens).tokens;
 
       console.log(
-        `  surgical             ${row.surgical.tokens.toLocaleString("en-US")} tokens  ` +
-          `${(row.surgical.elapsedMs / 1000).toFixed(1)}s  ` +
-          `${row.surgical.changesInScope}/${row.surgical.changesProposed} changes in scope`
+        `  surgical         wrote ${fmt(row.surgical.writtenTokens)} tokens across ` +
+          `${row.surgical.sectionsChanged} section(s), reported ` +
+          `${fmt(row.surgical.reportedTokens)}  ${(row.surgical.elapsedMs / 1000).toFixed(1)}s  ` +
+          `${row.surgical.changesInScope} in scope, ${row.surgical.changesOutOfScope} out`
       );
     } catch (error) {
       row.surgicalError = describe(error);
@@ -155,13 +160,17 @@ async function main(): Promise<void> {
         process.stdout.write("\r");
 
         row.wholeDocument = {
-          tokens: whole.tokens.tokens,
+          reportedTokens: whole.reportedTokens,
+          writtenTokens: whole.work.output.tokens,
+          sectionsChanged: whole.work.sectionsChanged,
           elapsedMs: Date.now() - t0,
           jobId: whole.jobId
         };
 
         console.log(
-          `  whole-document       ${row.wholeDocument.tokens.toLocaleString("en-US")} tokens  ` +
+          `  whole-document   wrote ${fmt(row.wholeDocument.writtenTokens)} tokens across ` +
+            `${row.wholeDocument.sectionsChanged} section(s), reported ` +
+            `${fmt(row.wholeDocument.reportedTokens)}  ` +
             `${(row.wholeDocument.elapsedMs / 1000).toFixed(1)}s`
         );
       } catch (error) {
@@ -171,11 +180,11 @@ async function main(): Promise<void> {
     }
 
     if (row.surgical !== null && row.wholeDocument !== null) {
-      const saved = row.wholeDocument.tokens - row.surgical.tokens;
+      const written = row.wholeDocument.writtenTokens - row.surgical.writtenTokens;
 
       console.log(
-        `  savings              ${saved.toLocaleString("en-US")} tokens  ` +
-          `(${((saved / row.wholeDocument.tokens) * 100).toFixed(2)}%)`
+        `  savings          ${fmt(written)} fewer tokens written ` +
+          `(${((written / Math.max(1, row.wholeDocument.writtenTokens)) * 100).toFixed(2)}%)`
       );
     }
 
