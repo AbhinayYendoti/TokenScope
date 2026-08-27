@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "../server/config.js";
+import { TokenScopeError } from "../server/errors.js";
 import { measureWholeDocument, rewriteSelection } from "../server/rewrite.js";
 import { whoami } from "../server/superdocs.js";
 import { resolveSelection } from "../shared/selection.js";
@@ -49,9 +50,32 @@ function readExisting(): BenchmarkFile | null {
   }
 }
 
+/**
+ * A failure worth recording says why.
+ *
+ * TokenScopeError carries the upstream detail on `hint` - for a failed job that
+ * is SuperDocs' own explanation - and a results file that drops it leaves the
+ * reader with "it failed" and nothing to act on.
+ */
 function describe(error: unknown): string {
+  if (error instanceof TokenScopeError) {
+    return error.hint === undefined ? error.message : `${error.message} ${error.hint}`;
+  }
+
   return error instanceof Error ? error.message : String(error);
 }
+
+/**
+ * How long a single job may take before the benchmark gives up on it.
+ *
+ * Far longer than the task pane allows, because a large regeneration is measured
+ * in tens of minutes and that duration is itself part of the result. An hour is
+ * long enough that a run which hits it has stalled rather than merely been slow:
+ * 300-page regenerations were observed frozen at 99% with `updated_at` not moving
+ * for over half an hour, while the surgical edit on the same document finished in
+ * under four minutes.
+ */
+const JOB_TIMEOUT_MS = 60 * 60 * 1000;
 
 function fmt(value: number | null): string {
   return value === null ? "not reported" : value.toLocaleString("en-US");
@@ -117,6 +141,7 @@ async function main(): Promise<void> {
         document,
         selection,
         instruction: INSTRUCTION,
+        timeoutMs: JOB_TIMEOUT_MS,
         onProgress: (progress, status) =>
           process.stdout.write(`\r  surgical  ${status} ${progress}%   `)
       });
@@ -154,6 +179,7 @@ async function main(): Promise<void> {
         const whole = await measureWholeDocument({
           document,
           instruction: INSTRUCTION,
+          timeoutMs: JOB_TIMEOUT_MS,
           onProgress: (progress, status) =>
             process.stdout.write(`\r  whole-document  ${status} ${progress}%   `)
         });

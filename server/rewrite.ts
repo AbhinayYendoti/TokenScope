@@ -107,6 +107,13 @@ export interface RewriteOptions {
   selection: Selection;
   instruction: string;
   modelTier?: ModelTier;
+  /**
+   * How long to wait for the job. The pane keeps the default because someone is
+   * sitting in front of it; the benchmark passes a much larger budget because a
+   * 300-page regeneration is measured in tens of minutes and the number is the
+   * whole point of running it.
+   */
+  timeoutMs?: number;
   onProgress?: (progress: number, status: string) => void;
 }
 
@@ -129,6 +136,7 @@ export async function rewriteSelection(options: RewriteOptions): Promise<Surgica
   });
 
   const job = await waitForJob(jobId, {
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     ...(options.onProgress === undefined
       ? {}
       : {
@@ -170,6 +178,7 @@ export async function measureWholeDocument(options: {
   document: DocumentSnapshot;
   instruction: string;
   modelTier?: ModelTier;
+  timeoutMs?: number;
   onProgress?: (progress: number, status: string) => void;
 }): Promise<WholeDocumentRun> {
   const sessionId = freshSessionId("wholedoc");
@@ -183,6 +192,7 @@ export async function measureWholeDocument(options: {
   });
 
   const job = await waitForJob(jobId, {
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     ...(options.onProgress === undefined
       ? {}
       : { onProgress: (j: Job) => options.onProgress?.(j.progress ?? 0, j.status) })
