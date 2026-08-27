@@ -16,7 +16,11 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
-    "bench": "tsx --env-file-if-exists=.env.local bench/run.ts"
+    "bench": "tsx --env-file-if-exists=.env.local bench/run.ts",
+    "word:certs": "office-addin-dev-certs install --machine",
+    "word:validate": "office-addin-manifest validate manifest.xml",
+    "word:start": "office-addin-debugging start manifest.xml desktop",
+    "word:stop": "office-addin-debugging stop manifest.xml"
   },
   "dependencies": {
     "express": "^5.1.0",
@@ -38,6 +42,8 @@
     "concurrently": "^9.2.1",
     "eslint": "^9.36.0",
     "jsdom": "^29.1.1",
+    "office-addin-dev-certs": "^2.0.10",
+    "office-addin-manifest": "^2.1.6",
     "prettier": "^3.6.2",
     "tsx": "^4.20.6",
     "typescript": "^5.9.2",

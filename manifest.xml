@@ -15,11 +15,13 @@
   xsi:type="TaskPaneApp">
 
   <Id>7f1c9d54-3c2e-4b18-9d4a-6f0a1c2b8e31</Id>
-  <Version>0.1.0</Version>
+  <Version>1.0.0.0</Version>
   <ProviderName>TokenScope</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
   <DisplayName DefaultValue="TokenScope" />
   <Description DefaultValue="Rewrite the selected paragraph and see what it cost, next to what regenerating the whole document would have cost." />
+  <IconUrl DefaultValue="https://localhost:5173/icon-32.png" />
+  <HighResolutionIconUrl DefaultValue="https://localhost:5173/icon-80.png" />
   <SupportUrl DefaultValue="https://github.com/AbhinayYendoti/TokenScope" />
 
   <AppDomains>
@@ -56,6 +58,11 @@
             <OfficeTab id="TabHome">
               <Group id="TokenScope.Group">
                 <Label resid="Group.Label" />
+                <Icon>
+                  <bt:Image size="16" resid="Icon.16" />
+                  <bt:Image size="32" resid="Icon.32" />
+                  <bt:Image size="80" resid="Icon.80" />
+                </Icon>
                 <Control xsi:type="Button" id="TokenScope.TaskpaneButton">
                   <Label resid="Taskpane.Label" />
                   <Supertip>
